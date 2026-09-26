@@ -41,7 +41,7 @@ class WorkingMemory:
                     password=settings.REDIS_PASSWORD or None,
                     decode_responses=True,
                     socket_timeout=0.5,
-                    connect_timeout=0.5,
+                    socket_connect_timeout=0.5,
                 )
                 self.redis.ping()
                 self.is_redis_available = True
