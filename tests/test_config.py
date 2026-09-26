@@ -1,4 +1,9 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from app.config import settings
+
 
 
 def test_settings_load():
@@ -8,3 +13,9 @@ def test_settings_load():
     assert settings.POSTGRES_DB == "memagent"
     assert "postgresql://" in settings.postgres_dsn
     assert "postgresql+asyncpg://" in settings.postgres_async_url
+
+
+if __name__ == "__main__":
+    import pytest
+    pytest.main(["-vs", __file__])
+

@@ -1,7 +1,12 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 from app.chat import BaselineAgent
 from app.llm import LLMClient
+
 
 
 @pytest.fixture
@@ -75,3 +80,8 @@ def test_baseline_agent_clear_history(mock_llm):
     assert len(agent.history) == 2
     agent.clear_history()
     assert len(agent.history) == 0
+
+
+if __name__ == "__main__":
+    pytest.main(["-vs", __file__])
+
