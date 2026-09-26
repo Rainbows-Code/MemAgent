@@ -25,10 +25,15 @@ class EmbeddingModel:
         self.use_real_model = False
 
         try:
+            import os
+            os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
             from sentence_transformers import SentenceTransformer
-            # 尝试装载 sentence-transformers 模型
+            # 优先从本地缓存离线装载，避免受海外 huggingface.co 网络波动影响
             logger.info(f"正在加载 Embedding 模型: {self.model_name}...")
-            self._model = SentenceTransformer(self.model_name)
+            try:
+                self._model = SentenceTransformer(self.model_name, local_files_only=True)
+            except Exception:
+                self._model = SentenceTransformer(self.model_name)
             self.use_real_model = True
             logger.info("Embedding 模型加载成功！")
         except Exception as e:

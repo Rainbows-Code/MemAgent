@@ -18,13 +18,25 @@ class LLMClient:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
     ):
-        self.api_key = api_key or settings.LLM_API_KEY
-        self.base_url = base_url or settings.LLM_BASE_URL
-        self.model = model or settings.LLM_MODEL
+        self._override_api_key = api_key
+        self._override_base_url = base_url
+        self._override_model = model
 
-        # 初始化同步与异步客户端
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        self.async_client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+    @property
+    def api_key(self) -> str:
+        return self._override_api_key or settings.LLM_API_KEY
+
+    @property
+    def base_url(self) -> str:
+        return self._override_base_url or settings.LLM_BASE_URL
+
+    @property
+    def model(self) -> str:
+        return self._override_model or settings.LLM_MODEL
+
+    @property
+    def client(self) -> OpenAI:
+        return OpenAI(api_key=self.api_key, base_url=self.base_url)
 
     def chat_completion(
         self,

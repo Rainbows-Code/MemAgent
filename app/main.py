@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import logging
 import time
+import re
 from typing import Dict, List, Any, Optional
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -90,8 +91,8 @@ async def chat_endpoint(req: ChatRequest):
     recent_msgs = working_mem.get_history()
     facts = await semantic_mem.get_all_facts(user_id)
 
-    # 1. 指代消解
-    coref_res = coref_resolver.resolve_coreference(
+    # 1. 异步指代消解与意图改写 (支持通用 LLM Query Rewrite 与启发式双核)
+    coref_res = await coref_resolver.aresolve_coreference(
         current_query=req.message,
         recent_messages=recent_msgs,
         facts=facts,
@@ -105,8 +106,12 @@ async def chat_endpoint(req: ChatRequest):
     )
     ctx = await retriever.retrieve_context(user_id=user_id, current_query=coref_res["resolved_query"])
 
-    # 3. 构建 Prompt 并调用 LLM
-    base_prompt = req.system_prompt or "你是一个贴心的智能助手。请精准回答用户的问题。"
+    # 3. 构建 Prompt 并调用 LLM (添加防旧话题幻觉强约束)
+    base_prompt = (
+        req.system_prompt
+        or "你是一个严谨、贴心且高效的智能助手。请基于用户当前轮次提出的具体意图进行专注、清晰的解答。\n"
+           "【重要准则】: 请严格聚焦于用户最新的问题核心。切勿将早期对话中无关的旧主题（如旧城市或不同行程）生硬混合进新问题的解答中。"
+    )
     prompt_messages = retriever.build_injected_prompt(base_prompt, ctx)
 
     # 将本轮消解后的 query 追加为最新的 user message 发送给 LLM
@@ -116,9 +121,33 @@ async def chat_endpoint(req: ChatRequest):
     assistant_reply = llm_res["content"]
     usage = llm_res["usage"]
 
-    # 4. 更新工作记忆
+    # 4. 更新工作记忆 (Redis)
     working_mem.add_message("user", req.message)
     working_mem.add_message("assistant", assistant_reply)
+
+    # 5. 自动语义记忆 (用户长效偏好与事实) 抽取与沉淀 (PostgreSQL user_fact)
+    query_text = req.message
+    # 地址与位置信息抽取
+    addr_match = re.search(r'(?:地址是|地址为|修改为|改成|设置为|改为)\s*([^\s,，。！？?]+)', query_text)
+    if addr_match:
+        await semantic_mem.set_fact(user_id, "address", addr_match.group(1).strip(), source="user_explicit")
+    # 旅行目的地偏好抽取
+    dest_match = re.search(r'(?:想去|去|计划去|打算去)\s*([^\s,，。！？?]{2,15}?)(?:旅游|出差|玩|出游|度假)?(?:[,，。！？?\s]|$)', query_text)
+    if dest_match:
+        clean_dest = re.sub(r'^(?:我想|我|请问|帮我)', '', dest_match.group(1)).strip()
+        if clean_dest and len(clean_dest) >= 2:
+            await semantic_mem.set_fact(user_id, "destination", clean_dest, source="user_explicit")
+    # 酒店与住宿偏好抽取
+    hotel_match = re.search(r'(?:帮我看看|看看|预定|预订|订)\s*([^\s,，。！？?]{2,20})', query_text)
+    if hotel_match and any(h in hotel_match.group(1) for h in ["酒店", "客栈", "房", "民宿"]):
+        await semantic_mem.set_fact(user_id, "preferred_hotel", hotel_match.group(1).strip(), source="user_explicit")
+
+    # 6. 自动情景记忆 (Episodic Memory) 沉淀归档 (pgvector)
+    try:
+        short_summary = f"用户询问: {coref_res['resolved_query']}; 助手建议核心: {assistant_reply[:60]}..."
+        await episodic_mem.add_memory(user_id=user_id, summary=short_summary, importance=0.7)
+    except Exception as e:
+        logger.warning(f"情景记忆写入失败: {e}")
 
     # 审计日志追加
     audit_entry = {
@@ -151,7 +180,10 @@ async def get_user_memory(user_id: str):
 
     semantic_data = await semantic_mem.get_all_facts(user_id)
 
-    episodic_data = await episodic_mem.search_memory(user_id=user_id, query="历史摘要", top_k=5)
+    # 优先获取该用户全部情景记忆列表
+    episodic_data = await episodic_mem.get_all_memories(user_id=user_id, limit=10)
+    if not episodic_data:
+        episodic_data = await episodic_mem.search_memory(user_id=user_id, query="历史摘要", top_k=5)
 
     return {
         "user_id": user_id,
@@ -159,6 +191,23 @@ async def get_user_memory(user_id: str):
         "working_memory": working_data,
         "semantic_facts": semantic_data,
         "episodic_summaries": episodic_data,
+    }
+
+
+@app.delete("/memory/{user_id}", summary="彻底清空指定用户的三层记忆状态")
+async def clear_user_memory(user_id: str):
+    """
+    重置并彻底清空指定用户的 Working Memory (Redis)、Episodic Memory (pgvector) 与 Semantic Facts，
+    避免受污染的历史对话继续干扰后续的全新会话。
+    """
+    working_mem = WorkingMemory(user_id=user_id)
+    working_mem.clear()
+    await episodic_mem.clear(user_id)
+    await semantic_mem.clear(user_id)
+    logger.info(f"已彻底清空用户 {user_id} 的三层记忆。")
+    return {
+        "status": "ok",
+        "message": f"用户 {user_id} 的三层记忆 (Redis/pgvector/PostgreSQL) 已彻底清空并重置。",
     }
 
 

@@ -24,6 +24,15 @@ if "messages" not in st.session_state:
 if "last_meta" not in st.session_state:
     st.session_state.last_meta = {}
 
+# 初始化加载三层记忆数据
+if "memory_data" not in st.session_state:
+    try:
+        init_res = httpx.get(f"{API_BASE_URL}/memory/{st.session_state.user_id}", timeout=5.0, trust_env=False)
+        if init_res.status_code == 200:
+            st.session_state.memory_data = init_res.json()
+    except Exception:
+        st.session_state.memory_data = {}
+
 # 侧边栏: 用户切换与记忆状态监控
 with st.sidebar:
     st.header("⚙️ 控制面板与记忆监控")
@@ -31,14 +40,20 @@ with st.sidebar:
     if user_id != st.session_state.user_id:
         st.session_state.user_id = user_id
         st.session_state.messages = []
-        st.experimental_rerun()
+        try:
+            res = httpx.get(f"{API_BASE_URL}/memory/{user_id}", timeout=5.0, trust_env=False)
+            if res.status_code == 200:
+                st.session_state.memory_data = res.json()
+        except Exception:
+            st.session_state.memory_data = {}
+        st.rerun()
 
     st.markdown("---")
     st.subheader("🔍 三层记忆实时镜像")
 
     if st.button("🔄 刷新记忆状态"):
         try:
-            res = httpx.get(f"{API_BASE_URL}/memory/{st.session_state.user_id}", timeout=3.0)
+            res = httpx.get(f"{API_BASE_URL}/memory/{st.session_state.user_id}", timeout=10.0, trust_env=False)
             if res.status_code == 200:
                 st.session_state.memory_data = res.json()
             else:
@@ -48,7 +63,18 @@ with st.sidebar:
 
     mem_data = st.session_state.get("memory_data", {})
     if mem_data:
-        st.markdown("**【语义记忆 (用户偏好)】**")
+        st.markdown("**【工作记忆 (Redis 对话队列)】**")
+        working_count = mem_data.get("working_memory_count", 0)
+        st.caption(f"当前保留轮次: {working_count} 条消息")
+        working_msgs = mem_data.get("working_memory", [])
+        if working_msgs:
+            with st.expander("查看 Redis 对话窗口", expanded=False):
+                for wm in working_msgs:
+                    st.text(f"[{wm.get('role')}]: {wm.get('content')[:30]}...")
+        else:
+            st.caption("暂无活跃工作记忆")
+
+        st.markdown("**【语义记忆 (用户长效偏好)】**")
         facts = mem_data.get("semantic_facts", [])
         if facts:
             for f in facts:
@@ -56,7 +82,7 @@ with st.sidebar:
         else:
             st.caption("暂无结构化偏好")
 
-        st.markdown("**【情景记忆 (向量摘要)】**")
+        st.markdown("**【情景记忆 (pgvector 向量摘要)】**")
         summaries = mem_data.get("episodic_summaries", [])
         if summaries:
             for s in summaries:
@@ -65,9 +91,15 @@ with st.sidebar:
             st.caption("暂无向量摘要")
 
     st.markdown("---")
-    if st.button("🗑️ 清空当前对话历史"):
+    if st.button("🗑️ 清空当前对话历史与后端记忆"):
+        try:
+            httpx.delete(f"{API_BASE_URL}/memory/{st.session_state.user_id}", timeout=5.0, trust_env=False)
+        except Exception:
+            pass
         st.session_state.messages = []
-        st.success("对话界面已重置")
+        st.session_state.memory_data = {}
+        st.success("对话界面与后端三层记忆已彻底重置！")
+        st.rerun()
 
 # 主界面: 聊天区
 st.subheader("💬 多轮对话与指代感知解析")
@@ -93,7 +125,7 @@ if user_input := st.chat_input("请输入您的问题 (支持使用“它、那�
                     "user_id": st.session_state.user_id,
                     "message": user_input,
                 }
-                res = httpx.post(f"{API_BASE_URL}/chat", json=payload, timeout=10.0)
+                res = httpx.post(f"{API_BASE_URL}/chat", json=payload, timeout=60.0, trust_env=False)
 
                 if res.status_code == 200:
                     data = res.json()
@@ -118,6 +150,15 @@ if user_input := st.chat_input("请输入您的问题 (支持使用“它、那�
                         "content": reply,
                         "meta": meta_info,
                     })
+
+                    # 自动刷新三层记忆镜像状态
+                    try:
+                        mem_refresh = httpx.get(f"{API_BASE_URL}/memory/{st.session_state.user_id}", timeout=5.0, trust_env=False)
+                        if mem_refresh.status_code == 200:
+                            st.session_state.memory_data = mem_refresh.json()
+                    except Exception:
+                        pass
+                    st.rerun()
                 else:
                     st.error(f"后端响应异常 ({res.status_code}): {res.text}")
             except Exception as e:

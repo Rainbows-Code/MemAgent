@@ -194,6 +194,50 @@ class EpisodicMemory:
         scored_records.sort(key=lambda x: x["similarity"], reverse=True)
         return scored_records[:top_k]
 
+    async def get_all_memories(self, user_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """获取指定用户的所有情景记忆摘要（按创建时间倒序）"""
+        if self.is_pg_available:
+            try:
+                conn = await asyncpg.connect(
+                    host=settings.POSTGRES_HOST,
+                    port=settings.POSTGRES_PORT,
+                    user=settings.POSTGRES_USER,
+                    password=settings.POSTGRES_PASSWORD,
+                    database=settings.POSTGRES_DB,
+                    timeout=3.0,
+                )
+                sql = """
+                SELECT id, summary, importance, created_at
+                FROM episodic_memory
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2;
+                """
+                rows = await conn.fetch(sql, user_id, limit)
+                await conn.close()
+                return [
+                    {
+                        "id": r["id"],
+                        "summary": r["summary"],
+                        "importance": r["importance"],
+                        "created_at": str(r["created_at"]),
+                    }
+                    for r in rows
+                ]
+            except Exception as e:
+                logger.error(f"查询情景记忆列表失败: {e}")
+
+        user_records = [r for r in self._fallback_records if r["user_id"] == user_id]
+        return [
+            {
+                "id": r["id"],
+                "summary": r["summary"],
+                "importance": r["importance"],
+                "created_at": str(r.get("created_at", "")),
+            }
+            for r in reversed(user_records[-limit:])
+        ]
+
     async def clear(self, user_id: str) -> None:
         """清空指定用户的 Episodic 记忆"""
         if self.is_pg_available:
