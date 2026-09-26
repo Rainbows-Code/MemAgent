@@ -1,0 +1,27 @@
+# 敏感环境与 Key
+.env
+*.env
+
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
+
+# 测试与评估缓存
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE & OS 配置文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
